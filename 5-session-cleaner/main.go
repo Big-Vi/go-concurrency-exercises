@@ -20,17 +20,21 @@ package main
 import (
 	"errors"
 	"log"
+	"sync"
+	"time"
 )
 
 // SessionManager keeps track of all sessions from creation, updating
 // to destroying.
 type SessionManager struct {
 	sessions map[string]Session
+	mu sync.Mutex
 }
 
 // Session stores the session's data
 type Session struct {
 	Data map[string]interface{}
+	Ticker *time.Ticker
 }
 
 // NewSessionManager creates a new sessionManager
@@ -49,9 +53,23 @@ func (m *SessionManager) CreateSession() (string, error) {
 		return "", err
 	}
 
+	ticker := time.NewTicker(5 * time.Second)
+
 	m.sessions[sessionID] = Session{
-		Data: make(map[string]interface{}),
+		Data:  make(map[string]interface{}),
+		Ticker: ticker,	
 	}
+
+	log.Println("Session created: ", sessionID)
+
+	go func() {
+		<-m.sessions[sessionID].Ticker.C
+	
+		m.mu.Lock()
+		delete(m.sessions, sessionID)
+		m.mu.Unlock()
+		log.Println("Session deleted: ", sessionID)
+	}()
 
 	return sessionID, nil
 }
@@ -63,7 +81,10 @@ var ErrSessionNotFound = errors.New("SessionID does not exists")
 // GetSessionData returns data related to session if sessionID is
 // found, errors otherwise
 func (m *SessionManager) GetSessionData(sessionID string) (map[string]interface{}, error) {
+	m.mu.Lock()
 	session, ok := m.sessions[sessionID]
+	m.mu.Unlock()
+
 	if !ok {
 		return nil, ErrSessionNotFound
 	}
@@ -72,14 +93,24 @@ func (m *SessionManager) GetSessionData(sessionID string) (map[string]interface{
 
 // UpdateSessionData overwrites the old session data with the new one
 func (m *SessionManager) UpdateSessionData(sessionID string, data map[string]interface{}) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	_, ok := m.sessions[sessionID]
+	
 	if !ok {
 		return ErrSessionNotFound
 	}
 
+	// reset ticker
+	ticker := m.sessions[sessionID].Ticker
+	ticker.Stop()
+	ticker.Reset(5 * time.Second)
+
 	// Hint: you should renew expiry of the session here
 	m.sessions[sessionID] = Session{
 		Data: data,
+		Ticker: ticker,
 	}
 
 	return nil
